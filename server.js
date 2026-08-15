@@ -14,11 +14,16 @@
  * tagged with a given hashtag.
  *
  * Endpoints:
- *   GET /api/instagram/hashtag?tag=<text>&limit=<n>
+ *   GET /api/instagram/category?category=<sad|funny|caption|love|lyrics|motivational|attitude>&limit=<n>
  *     -> [ { id, caption, thumbnail, isVideo, videoUrl, postUrl }, ... ]
- *     Videos-only entries are what most callers want (bot picks a
- *     random video from this list), but images are included too —
- *     filter client-side on isVideo if you only want video.
+ *     Tries each hashtag configured for that category (see hashtags.js)
+ *     in random order, moving on to the next one whenever a hashtag
+ *     turns out to have no video content — much more reliable than
+ *     depending on a single hashtag per category.
+ *
+ *   GET /api/instagram/hashtag?tag=<text>&limit=<n>&offset=<n>
+ *     -> same shape, but for one specific hashtag directly (used
+ *     internally by /category, also usable standalone)
  *
  *   GET /api/instagram/resolve?url=<any instagram.com/reel|p/... link>
  *     -> same shape as one item above
@@ -35,6 +40,7 @@ const express = require("express");
 const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const HASHTAGS_BY_CATEGORY = require("./hashtags");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -236,7 +242,28 @@ function normalizeEntries(rawEntries, limit) {
 }
 
 // ─────────────────────────────────────────────
-//  GET /api/instagram/hashtag?tag=...&limit=...
+//  Shared helper: fetch + normalize video/photo posts for one hashtag.
+//  Used by both /hashtag (single tag) and /category (tries several).
+// ─────────────────────────────────────────────
+async function fetchHashtagPosts(tag, limit, offset) {
+	const cleanTag = String(tag).replace(/^#/, "");
+	const hashtagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(cleanTag)}/`;
+	const rangeEnd = offset + limit - 1;
+	const rawEntries = await runGalleryDlFollowingQueue(hashtagUrl, [`--range`, `${offset}-${rangeEnd}`]);
+	return normalizeEntries(rawEntries, limit);
+}
+
+function shuffle(arr) {
+	const out = [...arr];
+	for (let i = out.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		[out[i], out[j]] = [out[j], out[i]];
+	}
+	return out;
+}
+
+// ─────────────────────────────────────────────
+//  GET /api/instagram/hashtag?tag=...&limit=...&offset=...
 // ─────────────────────────────────────────────
 app.get("/api/instagram/hashtag", async (req, res) => {
 	const tag = req.query.tag;
@@ -252,16 +279,15 @@ app.get("/api/instagram/hashtag", async (req, res) => {
 	}
 
 	try {
-		const cleanTag = String(tag).replace(/^#/, "");
-		const hashtagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(cleanTag)}/`;
-		const rangeEnd = offset + limit - 1;
-		const rawEntries = await runGalleryDlFollowingQueue(hashtagUrl, [`--range`, `${offset}-${rangeEnd}`]);
-
 		if (req.query.debug) {
+			const cleanTag = String(tag).replace(/^#/, "");
+			const hashtagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(cleanTag)}/`;
+			const rangeEnd = offset + limit - 1;
+			const rawEntries = await runGalleryDlFollowingQueue(hashtagUrl, [`--range`, `${offset}-${rangeEnd}`]);
 			return res.json({ rawEntries });
 		}
 
-		const posts = normalizeEntries(rawEntries, limit);
+		const posts = await fetchHashtagPosts(tag, limit, offset);
 
 		if (posts.length === 0) {
 			return res.status(404).json([]);
@@ -270,6 +296,60 @@ app.get("/api/instagram/hashtag", async (req, res) => {
 	} catch (err) {
 		console.error("[instagram/hashtag] error:", err.message);
 		return res.status(500).json({ error: err.message });
+	}
+});
+
+// ─────────────────────────────────────────────
+//  GET /api/instagram/category?category=<key>&limit=...
+//  Tries each hashtag configured for that category (hashtags.js) in
+//  random order, moving on to the next whenever one turns out to have
+//  no video content, and returns as soon as one succeeds. Much more
+//  reliable than hard-coding a single hashtag per category.
+// ─────────────────────────────────────────────
+app.get("/api/instagram/category", async (req, res) => {
+	const category = req.query.category;
+	const limit = Math.min(parseInt(req.query.limit, 10) || 20, 40);
+	const videosOnly = req.query.videosOnly !== "false"; // default true
+
+	if (!category) {
+		return res.status(400).json({ error: "category query param is required" });
+	}
+
+	const tagList = HASHTAGS_BY_CATEGORY[category];
+	if (!tagList || tagList.length === 0) {
+		return res.status(400).json({
+			error: `Unknown category "${category}". Available: ${Object.keys(HASHTAGS_BY_CATEGORY).join(", ")}`
+		});
+	}
+
+	const triedTags = [];
+	const shuffledTags = shuffle(tagList);
+
+	try {
+		for (const tag of shuffledTags) {
+			triedTags.push(tag);
+			const offset = Math.floor(Math.random() * 60) + 1;
+
+			let posts;
+			try {
+				posts = await fetchHashtagPosts(tag, limit, offset);
+			} catch (err) {
+				console.error(`[instagram/category] "${tag}" failed, trying next:`, err.message);
+				continue;
+			}
+
+			const candidates = videosOnly ? posts.filter((p) => p.isVideo && p.videoUrl) : posts;
+			if (candidates.length > 0) {
+				return res.json({ tagUsed: tag, triedTags, posts: candidates });
+			}
+			// this hashtag had no usable content — loop continues to the next one
+		}
+
+		// every configured hashtag for this category came up empty
+		return res.status(404).json({ error: "No video content found across any configured hashtag for this category.", triedTags });
+	} catch (err) {
+		console.error("[instagram/category] error:", err.message);
+		return res.status(500).json({ error: err.message, triedTags });
 	}
 });
 
@@ -306,7 +386,12 @@ app.get("/", (req, res) => {
 		status: "ok",
 		engine: "gallery-dl",
 		cookiesLoaded: hasCookies,
-		endpoints: ["/api/instagram/hashtag?tag=&limit=", "/api/instagram/resolve?url="]
+		endpoints: [
+			"/api/instagram/category?category=&limit=",
+			"/api/instagram/hashtag?tag=&limit=&offset=",
+			"/api/instagram/resolve?url="
+		],
+		categories: Object.keys(HASHTAGS_BY_CATEGORY)
 	});
 });
 
