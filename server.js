@@ -41,6 +41,7 @@ const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const HASHTAGS_BY_CATEGORY = require("./hashtags");
+const PROFILES_BY_CATEGORY = require("./profiles");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -253,6 +254,25 @@ async function fetchHashtagPosts(tag, limit, offset) {
 	return normalizeEntries(rawEntries, limit);
 }
 
+// ─────────────────────────────────────────────
+//  Shared helper: fetch + normalize recent posts from one profile.
+//  Used by /category when a category has profiles configured
+//  (profiles.js) — profile pages get blocked/rate-limited far less
+//  than hashtag search, so this is preferred over hashtags whenever
+//  curated profiles are available for the category.
+// ─────────────────────────────────────────────
+async function fetchProfilePosts(username, limit) {
+	const cleanUser = String(username).replace(/^@/, "");
+	const profileUrl = `https://www.instagram.com/${encodeURIComponent(cleanUser)}/`;
+	// Random small offset so repeated requests to the same profile don't
+	// always return the exact same top posts (mirrors the hashtag offset
+	// randomization above).
+	const offset = Math.floor(Math.random() * 15) + 1;
+	const rangeEnd = offset + limit - 1;
+	const rawEntries = await runGalleryDlFollowingQueue(profileUrl, [`--range`, `${offset}-${rangeEnd}`]);
+	return normalizeEntries(rawEntries, limit);
+}
+
 function shuffle(arr) {
 	const out = [...arr];
 	for (let i = out.length - 1; i > 0; i--) {
@@ -315,13 +335,53 @@ app.get("/api/instagram/category", async (req, res) => {
 		return res.status(400).json({ error: "category query param is required" });
 	}
 
+	const profileList = PROFILES_BY_CATEGORY[category];
 	const tagList = HASHTAGS_BY_CATEGORY[category];
-	if (!tagList || tagList.length === 0) {
+
+	if ((!profileList || profileList.length === 0) && (!tagList || tagList.length === 0)) {
+		const known = new Set([...Object.keys(PROFILES_BY_CATEGORY), ...Object.keys(HASHTAGS_BY_CATEGORY)]);
 		return res.status(400).json({
-			error: `Unknown category "${category}". Available: ${Object.keys(HASHTAGS_BY_CATEGORY).join(", ")}`
+			error: `Unknown category "${category}". Available: ${[...known].join(", ")}`
 		});
 	}
 
+	// Profiles take priority over hashtags whenever a category has any
+	// configured — profile pages are far less likely to be blocked/rate
+	// -limited than hashtag search, and give more consistent, on-topic
+	// results. A category with no profiles configured yet (profiles.js)
+	// silently falls back to the hashtag rotation below.
+	if (profileList && profileList.length > 0) {
+		const triedProfiles = [];
+		const shuffledProfiles = shuffle(profileList);
+
+		try {
+			for (const username of shuffledProfiles) {
+				triedProfiles.push(username);
+
+				let posts;
+				try {
+					posts = await fetchProfilePosts(username, limit);
+				} catch (err) {
+					console.error(`[instagram/category] profile "${username}" failed, trying next:`, err.message);
+					continue;
+				}
+
+				const candidates = videosOnly ? posts.filter((p) => p.isVideo && p.videoUrl) : posts;
+				if (candidates.length > 0) {
+					return res.json({ profileUsed: username, triedProfiles, posts: candidates });
+				}
+				// this profile had no usable video content right now — try the next one
+			}
+
+			// every configured profile for this category came up empty
+			return res.status(404).json({ error: "No video content found across any configured profile for this category.", triedProfiles });
+		} catch (err) {
+			console.error("[instagram/category] error:", err.message);
+			return res.status(500).json({ error: err.message, triedProfiles });
+		}
+	}
+
+	// ── Fallback: hashtag-based (categories with no profiles configured yet) ──
 	const triedTags = [];
 	const shuffledTags = shuffle(tagList);
 
@@ -391,7 +451,7 @@ app.get("/", (req, res) => {
 			"/api/instagram/hashtag?tag=&limit=&offset=",
 			"/api/instagram/resolve?url="
 		],
-		categories: Object.keys(HASHTAGS_BY_CATEGORY)
+		categories: [...new Set([...Object.keys(PROFILES_BY_CATEGORY), ...Object.keys(HASHTAGS_BY_CATEGORY)])]
 	});
 });
 
