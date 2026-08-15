@@ -49,19 +49,13 @@ const PORT = process.env.PORT || 3000;
 // ─────────────────────────────────────────────
 //  Cookies — same pattern as riyad-pinterest-api / riyad-video-api.
 // ─────────────────────────────────────────────
-const COOKIES_PATH = path.join(__dirname, "instagram_cookies.txt");
-let hasCookies = false;
-if (process.env.INSTAGRAM_COOKIES && process.env.INSTAGRAM_COOKIES.trim()) {
-	try {
-		fs.writeFileSync(COOKIES_PATH, process.env.INSTAGRAM_COOKIES.trim() + "\n");
-		hasCookies = true;
-		console.log("✅ Instagram cookies loaded from INSTAGRAM_COOKIES env var.");
-	} catch (e) {
-		console.error("⚠️ Failed to write cookies file:", e.message);
-	}
-} else {
-	console.warn("⚠️ No INSTAGRAM_COOKIES env var set — gallery-dl will run without login, much more likely to be blocked/rate-limited on Instagram.");
-}
+// Cookies intentionally NOT used — logged-in scraping got the account
+// disabled by Instagram for suspicious activity. Running fully
+// logged-out instead: less reliable/more rate-limited, but no account
+// risk. --sleep + a normal browser user-agent below help reduce how
+// "botty" the traffic looks.
+const hasCookies = false;
+console.log("ℹ️ Running in logged-out mode (no Instagram cookies) — slower/less reliable, but no account ban risk.");
 
 // ─────────────────────────────────────────────
 //  Run gallery-dl in JSON-dump mode against a URL and return the
@@ -69,8 +63,11 @@ if (process.env.INSTAGRAM_COOKIES && process.env.INSTAGRAM_COOKIES.trim()) {
 // ─────────────────────────────────────────────
 function runGalleryDl(url, extraArgs = []) {
 	return new Promise((resolve, reject) => {
-		const args = ["-j", "--no-download"];
-		if (hasCookies) args.push("--cookies", COOKIES_PATH);
+		const args = [
+			"-j", "--no-download",
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			"--sleep", "2-5"
+		];
 		args.push(...extraArgs, url);
 
 		execFile(
