@@ -74,17 +74,19 @@ function runGalleryDl(url, extraArgs = []) {
 		args.push(...extraArgs, url);
 
 		execFile(
-			"gallery-dl",
-			args,
-			{ timeout: 15000, maxBuffer: 1024 * 1024 * 20 },
-			(err, stdout, stderr) => {
-				if (err) return reject(new Error(stderr || err.message));
-				try {
-					const parsed = JSON.parse(stdout);
-					resolve(Array.isArray(parsed) ? parsed : []);
-				} catch (parseErr) {
-					reject(new Error(`Failed to parse gallery-dl output: ${parseErr.message}`));
-				}
+	"gallery-dl",
+	args,
+	{ timeout: 15000, maxBuffer: 1024 * 1024 * 20 },
+	(err, stdout, stderr) => {
+		if (err) {
+			const details = [
+				stderr ? `stderr: ${stderr.trim()}` : null,
+				stdout ? `stdout: ${stdout.trim().slice(0, 500)}` : null,
+				`exitCode: ${err.code}`,
+				`signal: ${err.signal || "none"}`
+			].filter(Boolean).join(" | ");
+			return reject(new Error(details || err.message));
+		}
 			}
 		);
 	});
