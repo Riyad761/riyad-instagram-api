@@ -66,14 +66,15 @@ function runGalleryDl(url, extraArgs = []) {
 		const args = [
 			"-j", "--no-download",
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-			"--sleep", "2-5"
+			"--sleep", "3-6",
+"--retries", "1"
 		];
 		args.push(...extraArgs, url);
 
 		execFile(
 	"gallery-dl",
 	args,
-	{ timeout: 15000, maxBuffer: 1024 * 1024 * 20 },
+	{ timeout: 90000, maxBuffer: 1024 * 1024 * 20 },
 	(err, stdout, stderr) => {
 		if (err) {
 			const details = [
