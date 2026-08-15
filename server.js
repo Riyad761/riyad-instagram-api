@@ -241,6 +241,11 @@ function normalizeEntries(rawEntries, limit) {
 app.get("/api/instagram/hashtag", async (req, res) => {
 	const tag = req.query.tag;
 	const limit = Math.min(parseInt(req.query.limit, 10) || 15, 40);
+	// Optional: fetch a different window of the hashtag feed instead of
+	// always the top N — lets the caller randomize which posts they see
+	// across repeated requests instead of getting the same top results
+	// (and therefore the same 1-2 videos) every time.
+	const offset = Math.max(parseInt(req.query.offset, 10) || 1, 1);
 
 	if (!tag) {
 		return res.status(400).json({ error: "tag query param is required" });
@@ -249,7 +254,8 @@ app.get("/api/instagram/hashtag", async (req, res) => {
 	try {
 		const cleanTag = String(tag).replace(/^#/, "");
 		const hashtagUrl = `https://www.instagram.com/explore/tags/${encodeURIComponent(cleanTag)}/`;
-		const rawEntries = await runGalleryDlFollowingQueue(hashtagUrl, [`--range`, `1-${limit}`]);
+		const rangeEnd = offset + limit - 1;
+		const rawEntries = await runGalleryDlFollowingQueue(hashtagUrl, [`--range`, `${offset}-${rangeEnd}`]);
 
 		if (req.query.debug) {
 			return res.json({ rawEntries });
