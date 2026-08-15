@@ -16,6 +16,7 @@ RUN npm install --omit=dev
 
 COPY server.js ./
 COPY hashtags.js ./
+COPY profiles.js ./
 
 EXPOSE 3000
 
