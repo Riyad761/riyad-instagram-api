@@ -76,7 +76,7 @@ function runGalleryDl(url, extraArgs = []) {
 		execFile(
 			"gallery-dl",
 			args,
-			{ timeout: 45000, maxBuffer: 1024 * 1024 * 20 },
+			{ timeout: 15000, maxBuffer: 1024 * 1024 * 20 },
 			(err, stdout, stderr) => {
 				if (err) return reject(new Error(stderr || err.message));
 				try {
