@@ -15,6 +15,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY server.js ./
+COPY hashtags.js ./
 
 EXPOSE 3000
 
